@@ -1,131 +1,155 @@
-import os
-import pandas as pd
-from vtxmpasmeshes.mesh_generator import full_generation_process_gtm
+"""
+Create an MPAS/MONAN mesh: global, or cut to a regional domain.
+
+A mesh is defined by a refinement (uniform | circle | ellipse) and a cut
+(global | circle | ellipse); see vtxmpasmeshes/mesh_config.py and
+scripts/mesh_input_file.txt for all parameters. Usually called by
+scripts/create_mesh.bash, which passes only the keys present in the input file.
+
+Outputs go to <meshes_dir>/<name>.region/:
+  <name>.region.grid.nc               mesh for the MPAS workflow
+  <name>.region.graph.info            graph file
+  <name>.region.graph.info.part.<N>   partition file (when N > 1)
+  <name>.region_for_plotting.grid.nc  mesh with the generation parameters as attributes
+  mesh input file copy
+"""
 import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
-# Create ArgumentParser object
-parser = argparse.ArgumentParser(description=
-                                 'Wrapper for creating a global or regional mesh.')
-# Input arguments
-parser.add_argument('--vtx_mpas_meshes_dir', type=str, help='vtx-mpas-meshes directory')
-parser.add_argument('--exp_dir', type=str, help='root directory of experiment')
-parser.add_argument('--meshes_dir', type=str, help='directory for saving meshes')
-parser.add_argument('--N', type=str, help='number of partitions')
-parser.add_argument('--lon', type=float, help='longitude for mesh center')
-parser.add_argument('--lat', type=float, help='latitude for mesh center')
-parser.add_argument('--inner_radius', type=float, help='inner radius (s)')
-parser.add_argument('--outer_radius', type=float, help='outer radius (s+m)')
-parser.add_argument('--n_layers', type=int, default=8, help='number of external layers')
-parser.add_argument('--high_res', type=float, help='minimum grid-distance')
-parser.add_argument('--low_res', type=float, help='maximum grid-distance')
-parser.add_argument('--do_regional', type=str, default='y', 
-                    help='flag for building regional (y) or global (n) mesh')
-parser.add_argument('--grid_type', type=str, default='doughnut', 
-                    help='type of grid to be constructed')
-# Ellipse-specific arguments (optional)
-parser.add_argument('--a_km', type=float, default=None,
-                    help='ellipse semi-major axis in km (optional; defaults to inner_radius)')
-parser.add_argument('--b_km', type=float, default=None,
-                    help='ellipse semi-minor axis in km (optional; defaults to inner_radius)')
-parser.add_argument('--angle', type=float, default=0.0,
-                    help='ellipse rotation angle in degrees CCW from east (optional)')
-parser.add_argument('--delta', type=float, default=0.12,
-                    help='transition width for ellipse in normalized units (optional)')
+from vtxmpasmeshes.mesh_config import (ALL_KEYS, DESCRIPTIONS, MPAS_N_LAYERS,
+                                       MeshConfigError, mesh_name, resolve)
 
-# Parse the command line arguments
-args = parser.parse_args()
+DEFAULT_MESHES_DIR = Path(__file__).resolve().parents[3] / 'grids'
+STRING_KEYS = ('refinement', 'cut')
+AUTO_HEADER = '# Automatic additions (written by create_regional_mesh.py)'
 
-# Set relevant directories
-DATA_DIR = args.vtx_mpas_meshes_dir + '/data'
-VTX_MPAS_MESHES_DIR = args.vtx_mpas_meshes_dir
 
-# Lon,lat of mesh center
-lon_ref = args.lon
-lat_ref = args.lat
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description='Create a global or regional MPAS/MONAN mesh.')
+    parser.add_argument('--meshes_dir', default=str(DEFAULT_MESHES_DIR),
+                        help='folder for the generated meshes (default: <repo>/grids)')
+    parser.add_argument('--input_file', default=None,
+                        help='mesh input file: file_name=<mesh name> is written '
+                             'to it and a copy is stored with the mesh')
+    parser.add_argument('--overwrite', action='store_true',
+                        help='regenerate the mesh even if it already exists')
+    parser.add_argument('--do_plots', action='store_true',
+                        help='also plot the resolution map and the mesh')
+    parser.add_argument('--keep_work_dir', action='store_true',
+                        help='keep the temporary work folder (JIGSAW files, global mesh)')
+    for key in ALL_KEYS:
+        parser.add_argument(f'--{key}', type=str if key in STRING_KEYS else float,
+                            default=None, help=DESCRIPTIONS[key])
+    # Old options: accepted only to explain how to replace them.
+    for key in ('grid_type', 'do_regional'):
+        parser.add_argument(f'--{key}', type=str, default=None, help=argparse.SUPPRESS)
+    return parser.parse_args(argv)
 
-# Parameters
-# These parameters define the changing in the resolution. Varying the distance
-# from the center of mesh d, we define the expected grid spacing S as follows (see Bardaji, 2022):
-## 0 < d < size --> S = highres
-## size < d < size + margin --> S = highres + lambda*(d-size)
-## size + margin < d < alpha (not defined here) --> S = lowres
-## alpha < d < beta (not defined here) --> S = lowres + lambda*(d-(size+margin))
-size = args.inner_radius # s in the paper
-highres = args.high_res # cgs in the paper
-margin = args.outer_radius - args.inner_radius # m in the paper
-lowres = args.low_res # mgs in the paper
-numlayers = args.n_layers # layers outside requested nominal radius
-grid_type = args.grid_type # type of grid to be constructed
 
-# Ellipse parameters: if user requested an ellipse, allow overriding defaults
-a_km = args.a_km if args.a_km is not None else size
-b_km = args.b_km if args.b_km is not None else size
-angle = args.angle
-delta = args.delta
+def update_input_file(input_file, name):
+    """Replace the file_name line of the input file (instead of appending)."""
+    lines = Path(input_file).read_text().splitlines()
+    lines = [l for l in lines
+             if not l.strip().startswith('file_name=') and l.strip() != AUTO_HEADER
+             and l.strip() != '# Automatic additions']
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines += [AUTO_HEADER, f'file_name={name}']
+    Path(input_file).write_text('\n'.join(lines) + '\n')
 
-# Set main filename
-# Include ellipse parameters in the name when relevant
-if grid_type == 'ellipse':
-    name = (f"lat_{round(lat_ref)}_lon_{round(lon_ref)}_ellipse_a_{round(a_km)}_b_{round(b_km)}_ang_{round(angle)}" +
-            f"_iradius_{round(size)}_margin_{round(margin)}_hres_{round(highres)}_lres_{round(lowres)}")
-else:
-    name = (f"lat_{round(lat_ref)}_lon_{round(lon_ref)}_oradius_{round(args.outer_radius)}_iradius_{round(size)}"+
-            f"_margin_{round(margin)}_hres_{round(highres)}_lres_{round(lowres)}") # 's' + str(size).zfill(2) + '_m' + str(margin).zfill(3)
 
-radius = size + margin
-region_border = radius + (numlayers * lowres)  # *0.9
+def partition(graph_file, nparts):
+    """Partition with gpmetis; returns the partition file."""
+    if shutil.which('gpmetis') is None:
+        raise RuntimeError('gpmetis not found: activate the monan-grid conda env')
+    subprocess.run(['gpmetis', '-minconn', '-contig', '-niter=200',
+                    graph_file, str(nparts)], check=True)
+    part = f'{graph_file}.part.{nparts}'
+    if not os.path.isfile(part):
+        raise RuntimeError(f'gpmetis did not write {part}')
+    return part
 
-# Set specific filenames
-regional_mesh = DATA_DIR + '/' + name + '.region.grid.nc'
-regional_mesh_info = DATA_DIR + '/' + name + '.region.graph.info'
-regional_mesh_plots = DATA_DIR + '/resolution*'
 
-# Run main script
-if not os.path.exists(regional_mesh):
-    # Create a regional mesh at the desired location -> with 4 layers (?)
-    print('creating regional mesh centered at chosen location')
-    # Pass ellipse parameters only (they are ignored unless grid_type == 'ellipse')
-    full_generation_process_gtm(
-        regional_mesh, grid_type,
-        redo=False, do_plots=False, do_region=args.do_regional,
-        highresolution=highres, lowresolution=lowres,
-        num_boundary_layers=numlayers,
-        size=size, margin=margin,
-        lat_ref=lat_ref, lon_ref=lon_ref,
-        # ellipse kwargs
-        a_km=a_km, b_km=b_km, angle=angle, delta=delta
-    )
-else:
-    print("Mesh already exists -- nothing to be done.")
+def main(argv=None):
+    args = parse_args(argv)
+    raw = {k: getattr(args, k) for k in ALL_KEYS}
+    raw.update(grid_type=args.grid_type, do_regional=args.do_regional)
+    try:
+        p, ignored = resolve(raw)
+    except MeshConfigError as err:
+        print(f'ERROR: {err}', file=sys.stderr)
+        return 2
+    if ignored:
+        print(f"Note: not used for refinement={p['refinement']}, cut={p['cut']}: "
+              f"{', '.join(ignored)}")
+    if p['cut'] != 'global' and p['n_layers'] > MPAS_N_LAYERS:
+        print(f"WARNING: n_layers={p['n_layers']} gives {p['n_layers'] - 1} boundary "
+              f'layers; MPAS uses 7 (n_layers={MPAS_N_LAYERS}).')
 
-# Save final output files
-OUTPUT_DIR = args.meshes_dir + f'/{name}.region'
-if not os.path.exists(OUTPUT_DIR):
-    os.system(f'mkdir {OUTPUT_DIR}')
-os.system(f'mv {regional_mesh} {regional_mesh_info} {regional_mesh_plots} {OUTPUT_DIR}')
-# Copy mesh files to run directory (one folder above mesh path)
-os.system(f'cd {OUTPUT_DIR}; cp {regional_mesh} {regional_mesh_info} ../')
+    # Imported here so input errors are reported without loading the mesh stack.
+    from vtxmpasmeshes.mesh_generator import generate_mesh
+    from vtxmpasmeshes import mesh_checks as mc
 
-# Copy relevant files for mesh generation
-os.system(f'cp {VTX_MPAS_MESHES_DIR}/mesh* create_mesh.log {OUTPUT_DIR}')
+    name = mesh_name(p) + '.region'
+    meshes_dir = os.path.abspath(args.meshes_dir)
+    out_dir = os.path.join(meshes_dir, name)
+    final_grid = os.path.join(out_dir, name + '.grid.nc')
+    print(f'Mesh name: {name}')
 
-# Create block decomposition file
-print('N:', args.N)
-os.system(f'gpmetis -minconn -contig -niter=200 {OUTPUT_DIR}/{name}.region.grid.graph.info {args.N}')
+    if os.path.exists(final_grid) and not args.overwrite:
+        print(f'Mesh already exists in {out_dir} -- nothing to be done '
+              '(use --overwrite to regenerate).')
+    else:
+        os.makedirs(meshes_dir, exist_ok=True)
+        work_dir = tempfile.mkdtemp(prefix='work_', dir=meshes_dir)
+        print(f'Work folder: {work_dir}')
+        try:
+            paths = generate_mesh(p, os.path.join(work_dir, name + '.grid.nc'),
+                                  work_dir, do_plots=args.do_plots)
+            print('\n>> Checking the mesh')
+            results = mc.check_mesh(paths['grid'], p, graph_file=paths['graph_info'])
+            print(mc.report(results))
+            if mc.has_errors(results):
+                raise RuntimeError('the mesh failed the checks above; it was not '
+                                   'partitioned or moved to the output folder')
+            outputs = [paths['grid'], paths['graph_info'], paths['plotting']]
+            if p['N'] > 1:
+                part = partition(paths['graph_info'], p['N'])
+                res = mc.check_partition_file(mc.Mesh(paths['grid']), part, p['N'])
+                print(mc.report([res]))
+                if not res.ok:
+                    raise RuntimeError('the partition file is invalid')
+                outputs.append(part)
+            for plot in ('resolution.pdf', 'resolution_mesh.png'):
+                if os.path.exists(os.path.join(work_dir, plot)):
+                    outputs.append(os.path.join(work_dir, plot))
+        except Exception as err:
+            print(f'\nERROR: {err}', file=sys.stderr)
+            print(f'Intermediate files kept in {work_dir}', file=sys.stderr)
+            return 1
+        if os.path.exists(out_dir):
+            shutil.rmtree(out_dir)
+        os.makedirs(out_dir)
+        for f in outputs:
+            shutil.move(f, os.path.join(out_dir, os.path.basename(f)))
+        if args.keep_work_dir:
+            print(f'Work folder kept: {work_dir}')
+        else:
+            shutil.rmtree(work_dir)
 
-# Remove temporary output files
-os.system(f'rm {DATA_DIR}/*.nc')
-os.system(f'rm -r {VTX_MPAS_MESHES_DIR}/mesh* {VTX_MPAS_MESHES_DIR}/tmp* points.txt')
+    if args.input_file:
+        update_input_file(args.input_file, name)
+        shutil.copy(args.input_file, out_dir)
+        print(f'file_name={name} written to {args.input_file}')
+    print(f'\nDone. Mesh files in {out_dir}')
+    return 0
 
-# Add file name to mesh_input_file.txt
-print(args.exp_dir)
-try:
-    # Open the file in append mode
-    with open(f'{args.exp_dir}/mesh_input_file.txt', 'a') as file:
-        # Append the line
-        file.write(f'file_name={name}.region' + '\n')
-    print(f'{name}.region added to mesh_input_file.txt.')
-    os.system(f'cp {args.exp_dir}/mesh_input_file.txt {OUTPUT_DIR}')
-    print(f'mesh_input_file.txt copied to {OUTPUT_DIR}')
-except FileNotFoundError:
-    print('mesh_input_file.txt not found.')
+
+if __name__ == '__main__':
+    sys.exit(main())
