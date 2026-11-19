@@ -1,13 +1,13 @@
 # Minimal environment for MONAN-grid-generator (mesh generation + grid plotting).
 # Everything from conda-forge; no build strings, so it resolves on linux-64 and osx-arm64.
-#   conda env create -f vtx_env_minimal.yml
+#   conda env create -f monan_grid_env.yml
 name: monan-grid
 channels:
   - conda-forge
 dependencies:
   - python=3.11
   # numerics / IO
-  - numpy<2          # MPAS-Limited-Area still uses np.Infinity (removed in NumPy 2)
+  - numpy<2          # tested with 1.26; NumPy 2 not yet tested
   - scipy
   - xarray
   - netcdf4
@@ -25,3 +25,4 @@ dependencies:
   - tqdm
   # dev tools
   - git
+  - pytest           # tests/ (run: pytest tests/ from the repo root)

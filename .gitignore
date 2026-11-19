@@ -8,11 +8,14 @@ __pycache__/
 *.info
 *.msh
 *.jig
+grids/
 
 # Figures
 *.png
 *.jpg
 *.jpeg
+# ...except the images used by the documentation
+!docs/images/*.png
 
 # C extensions
 *.so

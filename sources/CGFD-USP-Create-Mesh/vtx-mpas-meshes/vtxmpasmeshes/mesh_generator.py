@@ -1,5 +1,9 @@
 import os
+import shutil
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import xarray as xr
 import numpy as np
@@ -13,8 +17,11 @@ from vtxmpasmeshes.jigsaw_generator import jigsaw_gen_sph_grid
 from vtxmpasmeshes.mpas_plots import view_resolution_map, \
     view_mpas_regional_mesh
 from vtxmpasmeshes.dataset_utilities import distance_latlon_matrix
+from vtxmpasmeshes import mesh_geometry as geo
+from vtxmpasmeshes.mesh_config import ring_resolution
 
-PATH_LIMITED_AREA = '../../MPAS-Limited-Area'
+# sources/MPAS-Limited-Area, independent of the current working directory
+PATH_LIMITED_AREA = str(Path(__file__).resolve().parents[3] / 'MPAS-Limited-Area')
 
 
 def apply_resolution_at_distance(distances, ref_points, ref_resolutions):
@@ -543,94 +550,50 @@ def ellipse_variable_resolution_smoothstep(lat_values, lon_values, **kwargs):
     return size_map, kwargs
 
 
-def variable_resolution_latlonmap(grid, do_region, **kwargs):
+def variable_resolution_latlonmap(p, with_distance=False):
+    """
+    Target cell-size map (km) on a global lat-lon grid.
 
+    p: validated parameters from mesh_config.resolve (refinement x cut).
+    The refinement sets the cell size near the center; for regional cuts a
+    constant ring of n_layers * ring_res beyond the cut holds the MPAS
+    boundary layers, followed by a far field that coarsens up to 1000 km
+    (see mesh_geometry.target_resolution).
+    """
     print('\n>> Creating a variable resolution map')
+    print(f"\trefinement={p['refinement']}, cut={p['cut']}")
 
-    # GRID
-    # Create a global lat/lon grid at high resolution
-
-    highresolution = kwargs.get('highresolution', 10.)  # grid size in km
-    print('\tResolution in km of lat/lon grid: %.1f' % highresolution)
-    
-    # Convert highresolution in km to degrees (approximate, valid near the equator)
-    dist_degrees = highresolution / 110.
-
-    # Now, assuming a regular grid, we calculate how many points we need so that cells
-    # with this highresolution value cover the whole globe
+    if p['refinement'] == 'uniform' and p['cut'] == 'global':
+        # Constant field: a coarse grid describes it exactly.
+        dist_degrees = 1.0
+    else:
+        # Grid spacing of the finest resolution, so no detail is smoothed out.
+        dist_degrees = p['high_res'] / 110.
     nlat = int(180. / dist_degrees) + 1
     nlon = int(360. / dist_degrees) + 1
+    print(f'\tlat-lon grid: {nlat} x {nlon} points')
 
-    # Generate now such a grid
-    ds = xr.Dataset(
-        coords={
-            'lat': np.linspace(-90., 90., nlat),
-            'lon': np.linspace(-180., 180., nlon),
-        }
-    )
+    ds = xr.Dataset(coords={'lat': np.linspace(-90., 90., nlat),
+                            'lon': np.linspace(-180., 180., nlon)})
+    lat2d = ds['lat'].values[:, None]
+    lon2d = ds['lon'].values[None, :]
 
-    # DISTANCE
-    # Compute distance from each point to the reference point
+    ring_res = ring_resolution(p)
+    n_layers = p.get('n_layers', 0)
+    res = geo.target_resolution(lat2d, lon2d, p, ring_res, n_layers)
+    ds['resolution'] = xr.DataArray(data=res, dims=('lat', 'lon'))
+    if with_distance:
+        ds['distance'] = xr.DataArray(
+            data=geo.haversine_km(lat2d, lon2d, p['lat'], p['lon']),
+            dims=('lat', 'lon'))
 
-    lat_ref = kwargs.get('lat_ref', None)
-    if lat_ref is None:
-        lat_ref = 0.
-    lon_ref = kwargs.get('lon_ref', None)
-    if lon_ref is None:
-        lon_ref = 0.
-    kwargs.update({'lat_ref': lat_ref, 'lon_ref': lon_ref})
-
-    print('\tComputing the distance to the reference point '
-          '(%.2f, %.2f)' % (lat_ref, lon_ref))
-    dists = distance_latlon_matrix(ds.coords['lat'], ds.coords['lon'],
-                                   lat_ref=lat_ref, lon_ref=lon_ref,
-                                   do_tile=True)
-
-    ds['distance'] = xr.DataArray(data=dists, dims=('lat', 'lon'))
-
-    # RESOLUTION
-    # Set the resolution value at each point
-    if grid == 'doughnut':
-        if do_region == 'y':
-            print('\tComputing resolutions using technique %s, regional.' % grid)
-            dists, resol, kwargs = doughnut_variable_resolution(**kwargs)
-            ds['resolution'] = apply_resolution_at_distance(
-                ds['distance'], ref_points=dists, ref_resolutions=resol)
-        elif do_region == 'n':
-              print('\tComputing resolutions using technique %s, global.' % grid)
-              dists, resol, kwargs = doughnut_variable_resolution_global(**kwargs)
-              ds['resolution'] = apply_resolution_at_distance(
-                  ds['distance'], ref_points=dists, ref_resolutions=resol)
-        else:
-            raise ValueError('!! Flag do_regional should have either "y" or "n" values.')          
-    elif grid == 'constant':
-        if do_region == 'y':
-            print('\tComputing resolutions using technique %s, regional.' % grid)
-            dists, resol, kwargs = constant_resolution(**kwargs)
-            ds['resolution'] = apply_resolution_at_distance(
-            ds['distance'], ref_points=dists, ref_resolutions=resol)
-        elif do_region == 'n':
-            print('\tComputing resolutions using technique %s, global.' % grid)
-            dists, resol, kwargs = ellipse_variable_resolution(**kwargs)
-            ds['resolution'] = apply_resolution_at_distance(
-            ds['distance'], ref_points=dists, ref_resolutions=resol)
-    elif grid == 'ellipse':
-        if do_region == 'y':
-            print('\tComputing resolutions using technique %s, regional.' % grid)
-            resol_map, kwargs = ellipse_variable_resolution(
-                ds.coords['lat'].values, ds.coords['lon'].values, **kwargs)
-            ds['resolution'] = xr.DataArray(data=resol_map, dims=('lat', 'lon'))
-        elif do_region == 'n':
-            print('\tComputing resolutions using technique %s, global.' % grid)
-            resol_map, kwargs = ellipse_variable_resolution(#ellipse_circle_variable_resolution(
-                ds.coords['lat'].values, ds.coords['lon'].values, **kwargs)
-            ds['resolution'] = xr.DataArray(data=resol_map, dims=('lat', 'lon'))
-    else:
-        raise ValueError('!! Grid %s not implemented.' % grid)
-
-    ds.attrs = kwargs
-
+    ds.attrs = {k: v for k, v in p.items() if v is not None}
+    ds.attrs['ring_resolution'] = ring_res
+    if p['cut'] != 'global':
+        ds.attrs['ring_width_km'] = n_layers * ring_res
+    print(f"\tcell size range: {float(res.min()):.3g} - {float(res.max()):.3g} km")
     return ds
+
 
 def get_mesh_from_resolution(resolution_ds, basename='./mesh'):
     print('\n>> Generating a MPAS mesh')
@@ -789,64 +752,57 @@ def cut_circular_region_beta(mpas_global_file,
 
     return regional_grid, regional_grid_info
 
-def cut_circular_region_gtm(mpas_global_file,
-                        region_radius_meters,
-                        n_layers,
-                        boundary_layer_res,
-                        regional_grid=None,
-                        regional_grid_info=None,
-                        lat_cen=0., lon_cen=0.,
-                        path_create_region=PATH_LIMITED_AREA,
-                        ):
+def write_points_file(p, pts_file):
+    """MPAS-Limited-Area points file for the cut (circle, or custom polygon)."""
+    with open(pts_file, 'w') as f:
+        f.write('Name: region\n')
+        if p['cut'] == 'circle':
+            f.write('Type: circle\n')
+            f.write(f"Point: {p['lat']:.8f}, {p['lon']:.8f}\n")
+            f.write(f"radius: {p['cut_radius'] * 1000.0:.3f}\n")
+        elif p['cut'] == 'ellipse':
+            # Polygon on the same local-plane ellipse the resolution map uses.
+            blat, blon = geo.cut_boundary(p)
+            f.write('Type: custom\n')
+            f.write(f"Point: {p['lat']:.8f}, {p['lon']:.8f}\n")
+            for la, lo in zip(blat, blon):
+                f.write(f'{la:.8f}, {lo:.8f}\n')
+        else:
+            raise ValueError(f"no points file for cut={p['cut']!r}")
 
-    if not os.path.isdir(path_create_region):
-        raise IOError('The path to the MPAS-Limited-Area folder is not '
-                      'correct. Pass it to the function '
-                      'cut_circular_region_beta or define a correct '
-                      'default in variable PATH_LIMITED_AREA (in '
-                      'mesh_generator.py.')
 
-    print('\n>> Cutting a circular region')
-    print('\t centered at %.4f, %.4f' % (lat_cen, lon_cen))
-    print('\t with radius %.1fkm' % float(region_radius_meters/1000 
-                                          + n_layers*boundary_layer_res))
-
-    #if region_radius_meters < 5000:
-    #    raise ValueError('Do you want a %.0fm radius region?'
-    #                     'That looks way too small. Maybe you passed '
-    #                     'the radius in km instead as in meters.'
-    #                     % region_radius_meters)
-
+def cut_region(mpas_global_file, p, work_dir, regional_grid, regional_grid_info,
+               path_create_region=PATH_LIMITED_AREA):
+    """
+    Cut the regional mesh (circle or ellipse, see p['cut']) out of a global
+    MPAS mesh with MPAS-Limited-Area, adding p['n_layers'] boundary layers
+    (n_layers - 1 are marked; 8 gives the 7 MPAS needs).
+    """
+    script = os.path.join(path_create_region, 'create_region_n_layers_as_input')
+    if not os.path.isfile(script):
+        raise IOError(f'MPAS-Limited-Area script not found: {script}')
     if not os.path.exists(mpas_global_file):
-        raise IOError('Wanted to use the MPAS global file %s but'
-                      'it does not seem to exist.' % mpas_global_file)
+        raise IOError(f'global MPAS mesh not found: {mpas_global_file}')
 
-    with open('points.txt', 'w') as f:
-        f.write('Name: circle\n')
-        f.write('Type: circle\n')
-        f.write('Point: %.4f, %.4f\n' % (lat_cen, lon_cen))
-        f.write('radius: %.0f\n' % region_radius_meters)
+    print(f"\n>> Cutting a {p['cut']} region centered at "
+          f"({p['lat']:g}, {p['lon']:g}) with {p['n_layers']} layers")
+    pts_file = os.path.join(work_dir, 'region.pts')
+    write_points_file(p, pts_file)
+    for old in Path(work_dir).glob('region.*'):
+        if old.suffix in ('.nc', '.info'):
+            old.unlink()
 
-    # If there are regional files we should erase them
-    if regional_grid is None:
-        regional_grid = 'circle.grid.nc'
-    if regional_grid_info is None:
-        regional_grid_info = regional_grid.replace('.nc', '.graph.info')
-    os.system(f'rm -f {regional_grid}')
-    os.system(f'rm -f {regional_grid_info}')
-    
-    # Execute create region
-    os.system(path_create_region + '/create_region_n_layers_as_input points.txt ' +
-              mpas_global_file + f' {int(n_layers)}')
+    subprocess.run([sys.executable, script, pts_file,
+                    os.path.abspath(mpas_global_file), str(p['n_layers'])],
+                   cwd=work_dir, check=True)
 
-    if not os.path.exists('circle.grid.nc') or \
-            not os.path.exists('circle.graph.info'):
-        raise AttributeError('The regions were not generated correctly')
-    
-    # Move generated files to right location
-    os.system('mv circle.grid.nc ' + regional_grid)
-    os.system('mv circle.graph.info ' + regional_grid_info)
-
+    grids = sorted(Path(work_dir).glob('region.*.nc'))
+    graph = Path(work_dir) / 'region.graph.info'
+    if len(grids) != 1 or not graph.exists():
+        raise IOError('MPAS-Limited-Area did not produce the regional grid '
+                      f'and graph.info in {work_dir}')
+    shutil.move(str(grids[0]), regional_grid)
+    shutil.move(str(graph), regional_grid_info)
     return regional_grid, regional_grid_info
 
 def full_generation_process(mpas_grid_file, grid, redo=True,
@@ -950,123 +906,73 @@ def full_generation_process(mpas_grid_file, grid, redo=True,
 
     return mpas_grid_file, graph_info_file
 
-def full_generation_process_gtm(mpas_grid_file, grid, redo=True,
-                                do_plots=True, do_region='y', **kwargs):
+def generate_mesh(p, mpas_grid_file, work_dir, do_plots=False):
+    """
+    Build the MPAS mesh for validated parameters p (see mesh_config.resolve).
 
-    if os.path.isfile(mpas_grid_file) and not redo:
-        print(' .. already available')
-        return
-
+    Writes, next to each other:
+      <name>.grid.nc               mesh for the MPAS workflow
+      <name>.graph.info            graph for gpmetis
+      <name>_for_plotting.grid.nc  same mesh with the vtx-param-* metadata
+    Intermediate files go to work_dir. Returns a dict of paths and durations.
+    """
+    if not mpas_grid_file.endswith('.grid.nc'):
+        raise ValueError('mpas_grid_file must end in .grid.nc')
     graph_info_file = mpas_grid_file.replace('.grid.nc', '.graph.info')
-    path_save = os.path.dirname(mpas_grid_file)
+    plotting_file = mpas_grid_file.replace('.grid.nc', '_for_plotting.grid.nc')
 
-    os.system('rm -f ' + mpas_grid_file)
-    os.system('rm -f ' + graph_info_file)
+    ring_res = ring_resolution(p)
+    problem = geo.check_cut_encloses_refinement(p, ring_res)
+    if problem:
+        raise ValueError(problem)
 
     start_time = time.time()
-    resolution_ds = variable_resolution_latlonmap(grid, do_region, **kwargs)
-    
+    resolution_ds = variable_resolution_latlonmap(p, with_distance=do_plots)
     duration_resolution = time.time() - start_time
-    print(' .. finished finding resolution map: %.3fs\n\n' % duration_resolution)
-
-    border = resolution_ds.attrs['border']
-    radius = resolution_ds.attrs['radius']
-    lat_ref = resolution_ds.attrs['lat_ref']
-    lon_ref = resolution_ds.attrs['lon_ref']
+    print(' .. finished finding resolution map: %.3fs\n' % duration_resolution)
 
     if do_plots:
-        print('Plotting')
-        start_time = time.time()
+        extent = {'global': 2000.,
+                  'circle': p.get('cut_radius', 0.),
+                  'ellipse': max(p.get('cut_a_km', 0.), p.get('cut_b_km', 0.))}[p['cut']]
+        extent += resolution_ds.attrs.get('ring_width_km', 0.)
         view_resolution_map(resolution_ds,
-                            pdfname=path_save + '/resolution.pdf',
-                            list_distances=[
-                                #radius, 
-                                border
-                                ]
-                            )
-        duration_plots = time.time() - start_time
-        print(' .. finished doing resolution plots: %.3fs\n\n' % duration_plots)
+                            pdfname=os.path.join(work_dir, 'resolution.pdf'),
+                            list_distances=[extent])
 
     start_time = time.time()
-    tmp_mesh_file, tmp_graph_info = get_mesh_from_resolution(resolution_ds,
-                                                             basename='mesh')
+    mesh_file, mesh_graph = get_mesh_from_resolution(
+        resolution_ds, basename=os.path.join(work_dir, 'mesh'))
     duration_gen = time.time() - start_time
-    print(' .. finished generating global mesh: %.3fs\n\n' % duration_gen)
+    print(' .. finished generating global mesh: %.3fs\n' % duration_gen)
 
-    if do_region=='y':
-        start_time = time.time()
-        num_boundary_layers = kwargs.get('num_boundary_layers')
-        print ('number of boundary layers:', num_boundary_layers)
-        print('cutting circular region')
-        if grid == 'doughnut':
-            cutoff_radius = radius*1000 #border*1000
-            boundary_layer_res = kwargs['lowresolution']
-        elif grid == 'constant':
-            cutoff_radius = radius*1000 #kwargs['size']*1000
-            boundary_layer_res = kwargs['highresolution']
-        cut_circular_region_gtm(mpas_global_file=tmp_mesh_file, 
-                                region_radius_meters=cutoff_radius, #1000*(radius + (num_boundary_layers * lowresolution)), #radius*1000,
-                                n_layers = num_boundary_layers,
-                                boundary_layer_res=boundary_layer_res,
-                                regional_grid=mpas_grid_file,
-                                regional_grid_info=graph_info_file,
-                                lat_cen=lat_ref, lon_cen=lon_ref
-                                )
-        duration_region = time.time() - start_time
-        print(' .. finished cutting region: %.3fs\n\n' % duration_region)
-
-        if not os.path.isfile(mpas_grid_file) or \
-                not os.path.isfile(graph_info_file):
-            raise IOError('The file we had to generate was not generated')
+    start_time = time.time()
+    if p['cut'] == 'global':
+        shutil.move(mesh_file, mpas_grid_file)
+        shutil.move(mesh_graph, graph_info_file)
     else:
-        duration_region = 0.
-        os.system('mv ' + tmp_mesh_file + ' ' + mpas_grid_file)
-        os.system('mv ' + tmp_graph_info + ' ' + graph_info_file)
+        cut_region(mesh_file, p, work_dir, mpas_grid_file, graph_info_file)
+    duration_region = time.time() - start_time
 
-    # Open dataset and update attributes
-    mpas_ds = xr.open_dataset(mpas_grid_file)
+    # Copy of the mesh carrying the generation parameters as attributes.
+    with xr.open_dataset(mpas_grid_file) as mpas_ds:
+        mpas_ds = mpas_ds.load()
     for name, value in resolution_ds.attrs.items():
         mpas_ds.attrs['vtx-param-' + str(name)] = value
-    if do_region == 'y':
-        mpas_ds.attrs['vtx-region-num_boundary_layers'] = kwargs.get('num_boundary_layers')
-        lowres = mpas_ds.attrs['vtx-param-lowresolution']
-        region_border = radius + (kwargs.get('num_boundary_layers') * lowres) #* 0.6
-        mpas_ds.attrs['vtx-region_border'] = region_border
-
-    # Update the duration of the steps
-    durations_process = {
-        'resolution': duration_resolution,
-        'generation': duration_gen,
-        'region': duration_region,
-        'total': duration_resolution + duration_gen + duration_region,
-    }
-    for name, value in durations_process.items():
+    durations = {'resolution': duration_resolution, 'generation': duration_gen,
+                 'region': duration_region,
+                 'total': duration_resolution + duration_gen + duration_region}
+    for name, value in durations.items():
         mpas_ds.attrs['vtx-duration-' + name] = '%.2f' % value
-
-    # Save final mesh
-    mpas_grid_file_for_plotting = mpas_grid_file.replace('.region.grid.nc', '.region_for_plotting.grid.nc')
-    print('\n MESH FOR MPAS WORKFLOW:\n')
-    print(mpas_grid_file)
-    print('\n MESH FOR PLOTTING:\n')
-    print(mpas_grid_file_for_plotting)
-    # Remove _FillValue attribute (if it exists)
     for var in mpas_ds.variables:
-        #print ("removing FillValue from ",var)
-        #print (f"{var} encoding:", mpas_ds[var].encoding)
         mpas_ds[var].encoding['_FillValue'] = None
-        #print (f"{var} encoding after removal:", mpas_ds[var].encoding)
-        
-    mpas_ds.to_netcdf(mpas_grid_file_for_plotting)
+    mpas_ds.to_netcdf(plotting_file)
 
-    if not os.path.isfile(mpas_grid_file):
-        raise IOError('Could not update attributes of file ' +
-                      mpas_grid_file_for_plotting)
+    if do_plots and p['cut'] != 'global':
+        view_mpas_regional_mesh(plotting_file,
+                                outfile=os.path.join(work_dir, 'resolution_mesh.png'))
 
-
-    if do_plots:
-        if do_region:
-            print('Resolution Plots')
-            view_mpas_regional_mesh(mpas_grid_file_for_plotting,
-                                    outfile=path_save + '/resolution_mesh.png')
-
-    return mpas_grid_file, graph_info_file
+    print(f'\n MESH FOR MPAS WORKFLOW: {mpas_grid_file}')
+    print(f' MESH FOR PLOTTING:      {plotting_file}')
+    return {'grid': mpas_grid_file, 'graph_info': graph_info_file,
+            'plotting': plotting_file, 'durations': durations}

@@ -375,7 +375,7 @@ class LimitedArea_n_layers_as_input():
             iCell = sourceCell
             while iCell != targetCell:
                 bdyMaskCell[iCell] = self.INSIDE
-                minangle = np.Infinity
+                minangle = np.inf
                 mindist = sphere_distance(mesh.latCells[iCell],
                                           mesh.lonCells[iCell],
                                           mesh.latCells[targetCell],

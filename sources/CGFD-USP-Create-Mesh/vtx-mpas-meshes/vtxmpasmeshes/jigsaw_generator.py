@@ -99,6 +99,8 @@ def jigsaw_gen_sph_grid(cellWidth, x, y, earth_radius=6371.0e3,
     jig.savejig(opts.jcfg_file, opts)
 
     # Call jigsaw
-    subprocess.call(['jigsaw', opts.jcfg_file])
+    return_code = subprocess.call(['jigsaw', opts.jcfg_file])
+    if return_code != 0:
+        raise RuntimeError(f'JIGSAW failed with return code {return_code}')
 
     return opts.mesh_file
