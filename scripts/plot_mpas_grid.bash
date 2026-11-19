@@ -1,44 +1,39 @@
 #!/bin/bash
 #-----------------------------------------------------------------------------#
-# !SCRIPT: run_post_on_mpas_grid
+# Plot an MPAS grid: cells coloured by their resolution (km).
 #
-# !DESCRIPTION:
-#     Script to run the postprocessing of MONAN model using the original MPAS grid.
+# Usage:  bash plot_mpas_grid.bash GRID_FILE [OUTPUT_PNG] [extra options]
+#   GRID_FILE   MPAS grid (e.g. grids/<name>.region/<name>.region.grid.nc)
+#   OUTPUT_PNG  default: GRID_FILE with .png instead of .nc
+#   extra options are passed to mpas_plot_grid.py, e.g.
+#     -lat_min -60 -lat_max 25 -lon_min -110 -lon_max -10   (zoom)
+#     -vmin 5 -vmax 15                                       (colour range)
+#     -nc 8                                                  (parallel chunks)
 #
+# Requires the conda env monan-grid (set MESH_CONDA_ENV to use another env).
 #-----------------------------------------------------------------------------#
+set -eo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(dirname "$SCRIPT_DIR")
 
-# Set environment variables exports:
-echo ""
-echo -e "\033[1;32m==>\033[0m Moduling environment for MONAN model...\n"
-. setenv.bash
+if [[ $# -lt 1 ]]; then
+    sed -n '3,13p' "${BASH_SOURCE[0]}"
+    exit 1
+fi
+GFILEPATH=$1; shift
+if [[ $# -gt 0 && "$1" != -* ]]; then
+    POSTFILEPATH=$1; shift
+else
+    POSTFILEPATH=${GFILEPATH%.nc}.png
+fi
 
+CONDA_ENV=${MESH_CONDA_ENV:-monan-grid}
+if [[ "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
+fi
 
-
-# Standart directories variables:---------------------------------------
-DIRHOMES=${DIR_SCRIPTS}/scripts_CD-CT; mkdir -p ${DIRHOMES}  
-DIRHOMED=${DIR_DADOS}/scripts_CD-CT;   mkdir -p ${DIRHOMED}  
-export SCRIPTS=${DIRHOMES}/scripts;    mkdir -p ${SCRIPTS}
-DATAIN=${DIRHOMED}/datain;             mkdir -p ${DATAIN}
-DATAOUT=${DIRHOMED}/dataout;           mkdir -p ${DATAOUT}
-SOURCES=${DIRHOMES}/sources;           mkdir -p ${SOURCES}
-EXECS=${DIRHOMED}/execs;               mkdir -p ${EXECS}
-#----------------------------------------------------------------------
-
-
-# Local variables------------------------------------------------------
-## Grid file
-#GFILEPATH=../sources/CGFD-USP-Create-Mesh/vtx-mpas-meshes/mesh.grid.nc
-#GFILEPATH=${DATAIN}/fixed/lat_-21_lon_-55_ellipse_a_2500_b_3688_ang_-45_iradius_5000_margin_2000_hres_3_lres_1000.region.grid.nc
-#GFILEPATH=/mnt/beegfs/guilherme.mendonca/scripts_CD-CT_only_for_2km_ellipse/ellipse.grid.nc
-#GFILEPATH=/mnt/beegfs/guilherme.mendonca/scripts_CD-CT_only_for_2km_ellipse/datain/fixed/lat_-2_lon_-59_oradius_4000_iradius_250_margin_3750_hres_10_lres_1000.region/lat_-2_lon_-59_oradius_4000_iradius_250_margin_3750_hres_10_lres_1000.region.grid.nc
-GFILEPATH=/mnt/beegfs/guilherme.mendonca/MONAN-Tools/grids/circle.grid.nc
-## Output directory and filename to save plot
-POSTFILEPATH=/mnt/beegfs/guilherme.mendonca/MONAN-Tools/grids/circle.grid.png
-#---------------------------------------------------------------------
-
-source ~/.bashrc
-conda activate vtx_env
-#python3 ${SOURCES}/CGFD-USP-Post-Proc/mpas_plot_grid.py -g $GFILEPATH -o $POSTFILEPATH
-#python3 ${SOURCES}/CGFD-USP-Post-Proc/mpas_plot_grid.py -g $GFILEPATH -o $POSTFILEPATH -vmax 15 -vmin 5 -lat_min -60 -lat_max 25 -lon_min -110 -lon_max -10
-python3 ${SOURCES}/CGFD-USP-Post-Proc/mpas_plot_grid.py -g $GFILEPATH -o $POSTFILEPATH -lat_min -60 -lat_max 25 -lon_min -110 -lon_max -10
+python3 "$REPO/sources/CGFD-USP-Post-Proc/mpas_plot_grid.py" \
+    -g "$GFILEPATH" -o "$POSTFILEPATH" "$@"
+echo "Plot written to $POSTFILEPATH"
