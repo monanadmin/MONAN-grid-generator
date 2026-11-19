@@ -324,7 +324,7 @@ Command-line options of `create_regional_mesh.py` (called by `create_mesh.bash`)
 ## 7. Choosing good values
 
 - **Make the fine area larger than your region of interest.** Weather systems enter from outside; give them room to be resolved before they reach you.
-- **Transition width.** A gentle transition keeps the mesh smooth. A useful number is the growth of cell size per km of distance: (low_res − high_res) / (outer_radius − inner_radius). The tutorial has 40/300 ≈ 0.13 km/km. The web page warns above 0.25 km/km. Steeper meshes are still valid and MPAS will run on them (see [FAQ](#9-frequently-asked-questions)), but check the model fields near the transition.
+- **Transition width.** A gentle transition keeps the mesh smooth. A useful number is the growth of cell size per km of distance: (low_res − high_res) / (outer_radius − inner_radius). The tutorial has 40/300 ≈ 0.13 km/km. The web page warns above 0.25 km/km. Steeper meshes may still work, but check the model fields near the transition.
 - **Domain size.** Larger regional domains generally give smaller errors from the lateral boundaries (Skamarock et al. 2018). Keep the cut well away from the area you care about.
 - **Boundary layers.** Keep `n_layers=8` (7 layers). The tool puts them in uniform cells automatically.
 - **Partitions.** Choose `N` = the number of MPI tasks you will run; you can add more later with `gpmetis` (section 5).
@@ -355,21 +355,7 @@ If something else goes wrong, keep the intermediate files with `--keep_work_dir`
 
 ---
 
-## 9. Frequently asked questions
-
-**Does MPAS require a smooth transition?** No. The MPAS equations are written for any Voronoi mesh, however abruptly the cell size changes. Smooth transitions are recommended for accuracy: where cells change size quickly the numerics are locally less accurate, waves can be partly reflected, and scale-dependent physics (convection, diffusion) changes abruptly. Steep meshes run and can give good results, especially if the area you study is well inside the fine region — but look at the fields near the transition.
-
-**Can the refinement or the domain be a square?** MPAS itself has no restriction on shape, and MPAS-Limited-Area can cut any polygon. This tool currently offers circles and ellipses.
-
-**Global or regional?** A global variable-resolution mesh needs no lateral boundary conditions but costs more cells; a regional mesh is cheaper but depends on its boundary conditions. Both are supported with the same inputs (`cut=global` vs `cut=circle`/`ellipse`).
-
-**Why does the number of cells in the report differ slightly from the web page?** The page estimates from areas; the real mesh rounds to whole cells and adds pentagons and heptagons. Expect a few percent.
-
-**Where are my old meshes?** In `grids/` (or your `meshes_dir`), one folder per mesh, named after its values.
-
----
-
-## 10. Further reading
+## 9. Further reading
 
 - Skamarock et al. (2012), *Mon. Wea. Rev.* 140, 3090–3105 — MPAS-Atmosphere on centroidal Voronoi meshes. doi:10.1175/MWR-D-11-00215.1
 - Skamarock, Duda, Ha & Park (2018), *Mon. Wea. Rev.* 146, 3445–3460 — regional (limited-area) MPAS. doi:10.1175/MWR-D-18-0155.1
