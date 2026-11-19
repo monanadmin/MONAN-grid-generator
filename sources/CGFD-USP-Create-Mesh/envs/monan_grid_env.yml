@@ -1,0 +1,27 @@
+# Minimal environment for MONAN-grid-generator (mesh generation + grid plotting).
+# Everything from conda-forge; no build strings, so it resolves on linux-64 and osx-arm64.
+#   conda env create -f vtx_env_minimal.yml
+name: monan-grid
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  # numerics / IO
+  - numpy<2          # MPAS-Limited-Area still uses np.Infinity (removed in NumPy 2)
+  - scipy
+  - xarray
+  - netcdf4
+  # mesh generation
+  - jigsaw           # the `jigsaw` executable called by jigsaw_generator.py
+  - jigsawpy
+  - mpas_tools       # jigsaw_to_netcdf, convert, write_netcdf
+  - metis            # `gpmetis` for graph.info partitioning
+  # plotting (imported at module level by mesh_generator via mpas_plots)
+  - matplotlib-base
+  - cartopy
+  - shapely
+  - geopy
+  # post-processing scripts only (CGFD-USP-Post-Proc)
+  - tqdm
+  # dev tools
+  - git
