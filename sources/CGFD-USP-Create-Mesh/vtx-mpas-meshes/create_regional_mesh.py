@@ -43,6 +43,11 @@ def parse_args(argv=None):
                         help='also plot the resolution map and the mesh')
     parser.add_argument('--keep_work_dir', action='store_true',
                         help='keep the temporary work folder (JIGSAW files, global mesh)')
+    parser.add_argument('--make_report', type=str, default='yes', choices=('yes', 'no'),
+                        help='write <name>.png and <name>.report.html with the mesh plot, '
+                             'check results and distributions (default: yes)')
+    parser.add_argument('--no_report', dest='make_report', action='store_const', const='no',
+                        help='same as --make_report no')
     for key in ALL_KEYS:
         parser.add_argument(f'--{key}', type=str if key in STRING_KEYS else float,
                             default=None, help=DESCRIPTIONS[key])
@@ -74,6 +79,19 @@ def partition(graph_file, nparts):
     if not os.path.isfile(part):
         raise RuntimeError(f'gpmetis did not write {part}')
     return part
+
+
+def make_report(grid, p, results, out_dir, name, graph_file, part_file, durations):
+    """Mesh plot + HTML report; a failure here only warns, never fails the run."""
+    print('\n>> Plotting the mesh and writing its report')
+    try:
+        from vtxmpasmeshes.mesh_report import write_report
+        return list(write_report(grid, p, results, out_dir, name, graph_file=graph_file,
+                                 part_file=part_file, durations=durations))
+    except Exception as err:
+        print(f'WARNING: the mesh plot/report could not be made ({type(err).__name__}: {err}). '
+              'The mesh itself is fine.', file=sys.stderr)
+        return []
 
 
 def main(argv=None):
@@ -115,17 +133,28 @@ def main(argv=None):
             print('\n>> Checking the mesh')
             results = mc.check_mesh(paths['grid'], p, graph_file=paths['graph_info'])
             print(mc.report(results))
+            report_args = (paths['grid'], p, results, work_dir, name, paths['graph_info'])
             if mc.has_errors(results):
+                if args.make_report == 'yes':
+                    if make_report(*report_args, None, paths.get('durations')):
+                        print(f'Report: {os.path.join(work_dir, name + ".report.html")}',
+                              file=sys.stderr)
                 raise RuntimeError('the mesh failed the checks above; it was not '
-                                   'partitioned or moved to the output folder')
+                                   'partitioned or moved to the output folder'
+                                   + (' (see the report in the work folder)'
+                                      if args.make_report == 'yes' else ''))
             outputs = [paths['grid'], paths['graph_info'], paths['plotting']]
+            part = None
             if p['N'] > 1:
                 part = partition(paths['graph_info'], p['N'])
                 res = mc.check_partition_file(mc.Mesh(paths['grid']), part, p['N'])
                 print(mc.report([res]))
+                results.append(res)
                 if not res.ok:
                     raise RuntimeError('the partition file is invalid')
                 outputs.append(part)
+            if args.make_report == 'yes':
+                outputs += make_report(*report_args, part, paths.get('durations'))
             for plot in ('resolution.pdf', 'resolution_mesh.png'):
                 if os.path.exists(os.path.join(work_dir, plot)):
                     outputs.append(os.path.join(work_dir, plot))
@@ -138,6 +167,10 @@ def main(argv=None):
         os.makedirs(out_dir)
         for f in outputs:
             shutil.move(f, os.path.join(out_dir, os.path.basename(f)))
+        report_file = os.path.join(out_dir, name + '.report.html')
+        if os.path.exists(report_file):
+            print(f'Mesh plot: {os.path.join(out_dir, name + ".png")}')
+            print(f'Report:    {report_file}')
         if args.keep_work_dir:
             print(f'Work folder kept: {work_dir}')
         else:

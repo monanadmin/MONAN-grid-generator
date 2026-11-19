@@ -1,0 +1,18 @@
+# Mesh input file made with tools/mesh_input_designer.html (2026-11-19)
+# Run: bash scripts/create_mesh.bash <this file>
+lat=-22.6698
+lon=-45.0082
+refinement=ellipse
+high_res=10
+low_res=20
+a_km=478.5
+b_km=259.5
+angle=119.8
+delta=1.375
+cut=ellipse
+cut_a_km=1141.6
+cut_b_km=1484.9
+cut_angle=30.9
+n_layers=8
+N=64
+

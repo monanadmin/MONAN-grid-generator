@@ -27,7 +27,7 @@ from vtxmpasmeshes import mesh_geometry as geo
 from vtxmpasmeshes.mesh_config import ring_resolution
 
 N_BDY_LAYERS = 7          # MPAS: 5 relaxation + 2 specified layers
-MIN_DVDC = 0.12           # min dvEdge/dcEdge; smaller Voronoi edges hurt MPAS stability
+MIN_DVDC = 0.12           # heuristic: min dvEdge/dcEdge; near-degenerate edges hurt accuracy and stability
 REL_TOL = 1e-6            # exact geometric identities, up to round-off
 MAX_CVT_OFFSET = 0.15     # empirical: |centroid - generator| / sqrt(areaCell)
 MAX_GRADING = 1.5         # empirical: max size ratio of neighbouring cells
@@ -185,7 +185,7 @@ def check_dvdc(m):
     ratio = m.v['dvEdge'] / m.v['dcEdge']
     worst = float(np.min(ratio))
     return _res('dvEdge/dcEdge', worst >= MIN_DVDC,
-                f'min dvEdge/dcEdge = {worst:.3f} (MPAS needs >= {MIN_DVDC})')
+                f'min dvEdge/dcEdge = {worst:.3f} (heuristic limit {MIN_DVDC})')
 
 
 def check_voronoi(m):

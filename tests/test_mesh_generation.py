@@ -101,6 +101,15 @@ def test_mesh_is_built_and_passes_every_check(built, case):
     assert not failed, '\n' + mc.report(failed)
     if p['cut'] != 'global':
         assert any(r.name == 'boundary layers' for r in results)
+    # mesh plot and report
+    assert (d / f'{name}.png').stat().st_size > 10_000
+    report = (d / f'{name}.report.html').read_text()
+    for r in results:
+        assert r.name in report, f'check {r.name!r} missing from the report'
+    assert 'all ' in report and 'checks passed' in report
+    assert report.count('src="data:image/png;base64,') >= (8 if p['cut'] != 'global' else 7)
+    assert 'Boundary layers of this mesh' in report or p['cut'] == 'global'
+    assert 'WARNING: the mesh plot/report could not be made' not in b['proc'].stderr
 
 
 @needs_mesh_tools
@@ -123,6 +132,16 @@ def test_refinement_is_actually_fine_at_the_center(built):
         d = geo.haversine_km(m.lat, m.lon, b['p']['lat'], b['p']['lon'])
         near = mc.cell_size_km(m)[d < 150]
         assert abs(np.median(near) / b['p']['high_res'] - 1) < 0.1, case
+
+
+@needs_mesh_tools
+def test_no_report_skips_plot_and_report(tmp_path):
+    proc = run_create(CASES['uniform-global'], tmp_path, extra=['--no_report'])
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    name = mesh_name(resolve(CASES['uniform-global'])[0]) + '.region'
+    assert (tmp_path / name / f'{name}.grid.nc').exists()
+    assert not (tmp_path / name / f'{name}.report.html').exists()
+    assert not (tmp_path / name / f'{name}.png').exists()
 
 
 @needs_mesh_tools

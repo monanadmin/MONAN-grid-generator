@@ -30,7 +30,7 @@ read_mesh_inputs "$INPUT_FILE"
 # Keys passed on to Python when present in the input file
 MESH_KEYS=(lat lon refinement cut high_res low_res inner_radius outer_radius
            a_km b_km angle delta cut_radius cut_a_km cut_b_km cut_angle
-           n_layers N grid_type do_regional)
+           n_layers N make_report grid_type do_regional)
 OTHER_KEYS=(vtx_mpas_meshes_dir meshes_dir file_name)
 OLD_KEYS=(exp_dir)
 

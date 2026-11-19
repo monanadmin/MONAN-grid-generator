@@ -101,6 +101,14 @@ n_layers=8
 N=1
 
 #-----------------------------------------------------------------------------
+# Mesh plot and report
+#   make_report : yes (default) writes <name>.png and <name>.report.html next to
+#                 the mesh: the mesh plot, every check with what it means, and
+#                 distributions of the mesh variables. no skips them.
+#-----------------------------------------------------------------------------
+#make_report=yes
+
+#-----------------------------------------------------------------------------
 # Optional paths (defaults shown; relative to the repository)
 #   meshes_dir          : where meshes are written (<repo>/grids)
 #   vtx_mpas_meshes_dir : mesh generator code (<repo>/sources/CGFD-USP-Create-Mesh/vtx-mpas-meshes)
