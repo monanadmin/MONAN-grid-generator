@@ -90,7 +90,7 @@ Answer four questions before touching anything:
 
 ### Step 2a — Design it on the web page
 
-1. Open the page: `open tools/mesh_input_designer.html` (or double-click it in Finder).
+1. Open the page: `python3 tools/open_mesh_designer.py`. It starts a small local web server and opens the page in your browser; press Ctrl+C in the terminal when you are done. (Opening the HTML file directly — double-click or `open` — usually leaves the map blank or shows "Access blocked": OpenStreetMap refuses map requests from pages opened from disk.)
 2. Under **Refinement**, click **Circle**.
 3. Place the centre: **click on the map** over Southeast Brazil, or type `-22.9` and `-45` in *Centre latitude* and *Centre longitude*. The dark dot is the centre; drag it to move everything.
 4. Size the circle: drag the **dark-green dot** (the fine circle) to about 300 km and the **light-green dot** (where the transition ends) to about 600 km — or type `300` and `600` in *Fine circle radius* and *Transition ends at*. The shapes and numbers follow each other.

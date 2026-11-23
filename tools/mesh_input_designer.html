@@ -309,6 +309,26 @@ function inputFile(p, today) {
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// OpenStreetMap blocks tile requests without a Referer header, and pages opened
+// from disk (file://) never send one: tell the user how to open the page instead.
+(function () {
+  var msg = null;
+  if (typeof L === 'undefined') {
+    msg = 'The map library (Leaflet, from unpkg.com) could not be loaded. Check the internet connection, ' +
+          'or whether a firewall, VPN or content blocker is blocking unpkg.com.';
+  } else if (location.protocol === 'file:') {
+    msg = 'This page was opened from disk, so OpenStreetMap may refuse to send the map ' +
+          '("Access blocked" / blank map). Open it with: <code>python3 tools/open_mesh_designer.py</code>';
+  }
+  if (!msg) return;
+  var d = document.createElement('div');
+  d.style.cssText = 'position:relative;z-index:1000;background:#FFF4E5;color:#7A3E00;border-bottom:1px solid #E8B77A;' +
+                    'padding:8px 12px;font:14px/1.4 system-ui,sans-serif';
+  d.innerHTML = msg;
+  document.body.insertBefore(d, document.body.firstChild);
+})();
+</script>
+<script>
 var S = { lat: -22.7, lon: -45.0, refinement: 'circle', high_res: 3, low_res: 15,
           inner_radius: 300, outer_radius: 500, a_km: 600, b_km: 400, angle: 30, delta: 0.5,
           cut: 'circle', cutDefault: true, cut_radius: 500, cut_a_km: 900, cut_b_km: 600, cut_angle: 30,

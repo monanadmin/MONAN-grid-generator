@@ -8,6 +8,6 @@ Quick start:
 
 ```bash
 conda env create -f sources/CGFD-USP-Create-Mesh/envs/monan_grid_env.yml   # once
-open tools/mesh_input_designer.html                                        # design the mesh on a map (optional)
+python3 tools/open_mesh_designer.py                                        # design the mesh on a map (optional)
 bash scripts/create_mesh.bash my_mesh.txt                                  # build, check, plot and report
 ```
