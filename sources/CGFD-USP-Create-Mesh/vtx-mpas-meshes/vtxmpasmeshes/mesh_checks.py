@@ -48,16 +48,35 @@ def _res(name, ok, message, severity='error'):
     return CheckResult(name, bool(ok), severity, message)
 
 
+# Mesh variables the checks use. Only these are read, so the checks also work on
+# MPAS files that carry model fields (static.nc, init.nc, ...) from any generator.
+REQUIRED_VARS = ('nEdgesOnCell', 'cellsOnCell', 'edgesOnCell', 'verticesOnCell',
+                 'cellsOnEdge', 'verticesOnEdge', 'cellsOnVertex', 'edgesOnVertex',
+                 'xCell', 'yCell', 'zCell', 'xVertex', 'yVertex', 'zVertex',
+                 'xEdge', 'yEdge', 'zEdge', 'latCell', 'lonCell', 'latVertex', 'lonVertex',
+                 'dcEdge', 'dvEdge', 'areaCell', 'areaTriangle', 'kiteAreasOnVertex')
+OPTIONAL_VARS = ('bdyMaskCell', 'bdyMaskEdge', 'bdyMaskVertex')
+
+
 class Mesh:
     """Arrays of an MPAS grid file, 0-based connectivity (-1 = missing)."""
 
     def __init__(self, grid_file):
         with netCDF4.Dataset(grid_file) as nc:
             nc.set_auto_mask(False)
+            missing = [k for k in REQUIRED_VARS if k not in nc.variables]
+            if missing:
+                raise ValueError(f'{grid_file} is not a complete MPAS mesh: missing '
+                                 f'{", ".join(missing)}')
             self.attrs = {k: nc.getncattr(k) for k in nc.ncattrs()}
-            self.v = {k: nc.variables[k][:] for k in nc.variables}
+            self.v = {k: nc.variables[k][:] for k in REQUIRED_VARS + OPTIONAL_VARS
+                      if k in nc.variables}
             self.dims = {k: len(d) for k, d in nc.dimensions.items()}
-        self.R = float(self.attrs.get('sphere_radius', 1.0))
+        if 'sphere_radius' in self.attrs:
+            self.R = float(self.attrs['sphere_radius'])
+        else:   # not every generator writes it: take the radius of the cell centres
+            self.R = float(np.median(np.linalg.norm(
+                np.stack([self.v['xCell'], self.v['yCell'], self.v['zCell']], 1), axis=1)))
         self.nCells = self.dims['nCells']
         self.nEdges = self.dims['nEdges']
         self.nVertices = self.dims['nVertices']
@@ -460,13 +479,19 @@ def check_mesh(grid_file, p=None, graph_file=None, partition_file=None, nparts=N
               check_connectivity, check_euler, check_positive, check_dvdc,
               check_voronoi, check_areas, check_cvt, check_grading,
               check_boundary_layers]
-    results = [c(m) for c in checks]
+    calls = [(c.__name__, c, ()) for c in checks]
     if graph_file:
-        results.append(check_graph_file(m, graph_file))
+        calls.append(('graph.info', check_graph_file, (graph_file,)))
     if partition_file:
-        results.append(check_partition_file(m, partition_file, nparts))
+        calls.append(('partition file', check_partition_file, (partition_file, nparts)))
     if p is not None:
-        results += [check_cell_size(m, p), check_ring(m, p), check_cut_kept(m, p)]
+        calls += [(c.__name__, c, (p,)) for c in (check_cell_size, check_ring, check_cut_kept)]
+    results = []
+    for name, check, extra in calls:
+        try:
+            results.append(check(m, *extra))
+        except Exception as err:   # a check that cannot run is a failure, not a crash
+            results.append(_res(name, False, f'could not run ({type(err).__name__}: {err})'))
     return [r for r in results if r is not None]
 
 

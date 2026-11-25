@@ -8,6 +8,11 @@ write_report() makes, for one generated mesh:
                       the mesh plot, every check result with what it means
                       and its references, drawings of what the checks test,
                       and distributions of the mesh variables
+
+p (the generation parameters) may be None, for a mesh made by another tool:
+then the parts that compare with the requested resolution map (outlines,
+actual/requested size, input table) are left out and the maps are centred on
+the finest cells.
 """
 import base64
 import datetime
@@ -122,6 +127,35 @@ def _unwrap(lon, lon0):
     return lon0 + geo.wrap_lon(np.asarray(lon) - lon0)
 
 
+def _centre(m, p):
+    """(lat, lon) the maps are centred on: the requested centre, or else the finest cells."""
+    if p is not None:
+        return p['lat'], p['lon']
+    size = mc.cell_size_km(m)
+    if size.max() > 1.05 * size.min():
+        fine = size <= np.percentile(size, 1)
+    else:                                   # uniform: centre of the whole mesh
+        fine = np.ones(m.nCells, bool)
+    v = m.xc[fine].sum(0)
+    if np.linalg.norm(v) < 1e-6 * m.R * fine.sum():   # uniform global mesh: any centre will do
+        return 0.0, 0.0
+    v = v / np.linalg.norm(v)
+    return (float(np.degrees(np.arcsin(np.clip(v[2], -1, 1)))),
+            float(np.degrees(np.arctan2(v[1], v[0]))))
+
+
+def _fine_extent(m, lon0):
+    """Map extent around the finer cells (None if the mesh is nearly uniform)."""
+    size = mc.cell_size_km(m)
+    if size.max() < 1.3 * size.min():
+        return None
+    sel = size <= size.min() + 0.3 * (size.max() - size.min())
+    lat = m.lat[sel]
+    lon = _unwrap(m.lon[sel], lon0)
+    pad = 3
+    return (lon.min() - pad, lon.max() + pad, max(lat.min() - pad, -90), min(lat.max() + pad, 90))
+
+
 def _cell_polygons(m, lon0):
     """Cell polygons in (lon, lat) degrees, longitudes continuous around lon0."""
     latv = np.degrees(m.v['latVertex'])
@@ -179,7 +213,7 @@ def plot_mesh(m, p, values, label, extent=None, cmap='viridis_r', vmin=None, vma
               outlines=True):
     """Map of the cells coloured by `values`. extent=(lon_min, lon_max, lat_min, lat_max) or None."""
     import cartopy.crs as ccrs
-    lon0 = p['lon']
+    lon0 = _centre(m, p)[1]
     polys, keep = _cell_polygons(m, lon0)
     fig = plt.figure(figsize=(10, 6.2))
     ax = plt.axes(projection=ccrs.PlateCarree(central_longitude=lon0))
@@ -196,10 +230,11 @@ def plot_mesh(m, p, values, label, extent=None, cmap='viridis_r', vmin=None, vma
         ax.set_extent(extent, crs=data)
         span = max(extent[1] - extent[0], extent[3] - extent[2])
     coast = _coastlines(ax, span)
-    if outlines:
+    if outlines and p is not None:
         for lab, la, lo, st in _outlines(p):
             ax.plot(_unwrap(lo, lon0), la, transform=data, zorder=4, label=lab, **st)
-        ax.legend(loc='lower left', fontsize=8, framealpha=0.85)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(loc='lower left', fontsize=8, framealpha=0.85)
     gl = ax.gridlines(draw_labels=True, linewidth=0.3, color='grey', alpha=0.6)
     gl.top_labels = gl.right_labels = False
     cb = fig.colorbar(pc, ax=ax, shrink=0.8, pad=0.02)
@@ -210,7 +245,7 @@ def plot_mesh(m, p, values, label, extent=None, cmap='viridis_r', vmin=None, vma
 
 def _regional_extent(m, p):
     lat = np.degrees(m.v['latCell'])
-    lon = _unwrap(np.degrees(m.v['lonCell']), p['lon'])
+    lon = _unwrap(np.degrees(m.v['lonCell']), _centre(m, p)[1])
     pad = 1.5
     return (lon.min() - pad, lon.max() + pad, max(lat.min() - pad, -90), min(lat.max() + pad, 90))
 
@@ -227,7 +262,7 @@ def _refinement_extent(p):
 # ---------------------------------------------------------------------------
 def _fig_boundary_layers(m, p):
     mask = m.v['bdyMaskCell'].astype(int)
-    lat0, lon0 = p['lat'], p['lon']
+    lat0, lon0 = _centre(m, p)
     latv = np.degrees(m.v['latVertex'])
     lonv = np.degrees(m.v['lonVertex'])
     polys = []
@@ -238,16 +273,17 @@ def _fig_boundary_layers(m, p):
     fig, ax = plt.subplots(figsize=(9.5, 7.6))
     ax.add_collection(PolyCollection(polys, facecolors=[LAYER_COLOURS[int(k)] for k in mask],
                                      edgecolors='white', linewidths=0.3))
-    blat, blon = geo.cut_boundary(p, n=361)
-    bx, by = geo.local_xy(blat, blon, lat0, lon0, 0.0)
-    ax.plot(bx, by, color=NAVY, lw=2, ls='--', label='cut line')
+    if p is not None:
+        blat, blon = geo.cut_boundary(p, n=361)
+        bx, by = geo.local_xy(blat, blon, lat0, lon0, 0.0)
+        ax.plot(bx, by, color=NAVY, lw=2, ls='--', label='cut line')
     allxy = np.concatenate(polys)
     lim = np.abs(allxy).max() * 1.03
     ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim); ax.set_aspect('equal')
     handles = [Patch(fc=LAYER_COLOURS[0], label='0  interior')] + \
               [Patch(fc=LAYER_COLOURS[k], label=f'{k}  relaxation zone') for k in range(1, 6)] + \
               [Patch(fc=LAYER_COLOURS[k], label=f'{k}  specified zone') for k in (6, 7)] + \
-              [plt.Line2D([], [], color=NAVY, ls='--', label='cut line')]
+              ([plt.Line2D([], [], color=NAVY, ls='--', label='cut line')] if p is not None else [])
     ax.legend(handles=handles, title='bdyMaskCell', loc='upper left', bbox_to_anchor=(1.01, 1), fontsize=9)
     ax.set_xlabel('km east of centre'); ax.set_ylabel('km north of centre')
     ax.set_title('Boundary layers of this mesh')
@@ -271,24 +307,33 @@ def _distributions(m, p, part_file, nparts):
     """List of (title, png bytes, caption)."""
     figs = []
     size = mc.cell_size_km(m)
-    target = mc.target_km(m, p)
-    ratio = size / target
-    dist = geo.haversine_km(m.lat, m.lon, p['lat'], p['lon'])
+    target = mc.target_km(m, p) if p is not None else None
+    lat0, lon0 = _centre(m, p)
+    dist = geo.haversine_km(m.lat, m.lon, lat0, lon0)
     regional = m.regional
     mask = m.v['bdyMaskCell'].astype(int) if regional else np.zeros(m.nCells, int)
 
-    fig, axs = plt.subplots(1, 2, figsize=(12, 4.2))
-    lo, hi = np.nanmin([size.min(), target.min()]), np.nanmax([size.max(), target.max()])
-    bins = np.linspace(lo, hi, 60)
-    axs[0].hist(target, bins=bins, color=GREY, alpha=0.6, label='requested')
-    axs[0].hist(size, bins=bins, color=GREEN, alpha=0.6, label='actual')
-    axs[0].set_xlabel('cell size (km)'); axs[0].set_ylabel('cells'); axs[0].legend()
-    axs[0].set_title('Cell size: actual vs requested', fontsize=11)
-    _hist(axs[1], ratio, 'Actual / requested cell size', 'ratio',
-          lines=[(1 - mc.SIZE_TOL, f'-{mc.SIZE_TOL:.0%}', ORANGE), (1 + mc.SIZE_TOL, f'+{mc.SIZE_TOL:.0%}', ORANGE)])
-    fig.tight_layout()
-    figs.append(('Cell size', _png(fig), 'Cell size = mean distance to the neighbouring cell centres. '
-                 'The ratio should cluster around 1; dashed lines are the ±25% tolerance per cell.'))
+    if target is not None:
+        ratio = size / target
+        fig, axs = plt.subplots(1, 2, figsize=(12, 4.2))
+        lo, hi = np.nanmin([size.min(), target.min()]), np.nanmax([size.max(), target.max()])
+        bins = np.linspace(lo, hi, 60)
+        axs[0].hist(target, bins=bins, color=GREY, alpha=0.6, label='requested')
+        axs[0].hist(size, bins=bins, color=GREEN, alpha=0.6, label='actual')
+        axs[0].set_xlabel('cell size (km)'); axs[0].set_ylabel('cells'); axs[0].legend()
+        axs[0].set_title('Cell size: actual vs requested', fontsize=11)
+        _hist(axs[1], ratio, 'Actual / requested cell size', 'ratio',
+              lines=[(1 - mc.SIZE_TOL, f'-{mc.SIZE_TOL:.0%}', ORANGE),
+                     (1 + mc.SIZE_TOL, f'+{mc.SIZE_TOL:.0%}', ORANGE)])
+        fig.tight_layout()
+        figs.append(('Cell size', _png(fig), 'Cell size = mean distance to the neighbouring cell centres. '
+                     'The ratio should cluster around 1; dashed lines are the ±25% tolerance per cell.'))
+    else:
+        fig, ax = plt.subplots(figsize=(8, 4.2))
+        _hist(ax, size, 'Cell size', 'cell size (km)')
+        fig.tight_layout()
+        figs.append(('Cell size', _png(fig), 'Cell size = mean distance to the neighbouring cell centres '
+                     '(no requested resolution map to compare with).'))
 
     fig, ax = plt.subplots(figsize=(12, 4.6))
     if regional:
@@ -298,9 +343,11 @@ def _distributions(m, p, part_file, nparts):
                        label='interior' if k == 0 else (f'layer {k}' if k in (1, 7) else None))
     else:
         ax.scatter(dist, size, s=3, color=GREEN, label='cells')
-    o = np.argsort(dist)
-    ax.plot(dist[o], target[o], 'k.', ms=1, label='requested')
-    ax.set_xlabel('distance from the centre (km)'); ax.set_ylabel('cell size (km)')
+    if target is not None:
+        o = np.argsort(dist)
+        ax.plot(dist[o], target[o], 'k.', ms=1, label='requested')
+    ax.set_xlabel('distance from the centre (km)' if p is not None else
+                  f'distance from the finest cells ({lat0:.1f}°, {lon0:.1f}°) (km)'); ax.set_ylabel('cell size (km)')
     if not regional:
         ax.set_xscale('symlog', linthresh=1000)
     ax.legend(markerscale=3, fontsize=9)
@@ -374,6 +421,10 @@ figcaption{font-size:13px;color:#4A5568;font-style:italic}code{background:#f1f3f
 """
 
 
+OUTLINE_CAPTION = (' Green: refinement outlines; orange: cut; grey dotted: end of the uniform ring '
+                   'that holds the boundary layers.')
+
+
 def _status(results):
     fails = [r for r in results if not r.ok and r.severity == 'error']
     warns = [r for r in results if not r.ok and r.severity != 'error']
@@ -385,9 +436,14 @@ def _status(results):
 
 
 def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_file=None,
-                 durations=None):
-    """Write <name>.png and <name>.report.html into out_dir. Returns their paths."""
+                 durations=None, nparts=None, made_by='create_regional_mesh.py'):
+    """Write <name>.png and <name>.report.html into out_dir. Returns their paths.
+
+    p may be None (mesh not made by this generator); nparts defaults to p['N']."""
     m = mc.Mesh(grid_file)
+    lat0, lon0 = _centre(m, p)
+    if nparts is None:
+        nparts = p.get('N', 1) if p is not None else 1
     size = mc.cell_size_km(m)
     e = html.escape
 
@@ -403,10 +459,10 @@ def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_fil
                                title=f'{m.nCells:,} cells')
         main_png = _png(fig, dpi=150)
         extra = []
-        ext = _refinement_extent(p)
+        ext = _refinement_extent(p) if p is not None else _fine_extent(m, lon0)
         if ext is not None:
             fig, _ = plot_mesh(m, p, size, 'cell size (km)', extent=ext, vmin=smin,
-                               vmax=np.percentile(size[(geo.haversine_km(m.lat, m.lon, p['lat'], p['lon'])
+                               vmax=np.percentile(size[(geo.haversine_km(m.lat, m.lon, lat0, lon0)
                                                         < 3000)], 99.5),
                                title='Zoom on the refinement')
             extra.append(('Zoom on the refinement', _png(fig, dpi=150)))
@@ -414,11 +470,13 @@ def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_fil
     with open(png_path, 'wb') as f:
         f.write(main_png)
 
-    ratio = size / mc.target_km(m, p)
-    fig, _ = plot_mesh(m, p, ratio, 'actual / requested cell size', cmap='RdBu_r', vmin=0.75, vmax=1.25,
-                       extent=_regional_extent(m, p) if m.regional else _refinement_extent(p),
-                       title='Where the cell size departs from the request')
-    ratio_png = _png(fig, dpi=130)
+    ratio_png = None
+    if p is not None:
+        ratio = size / mc.target_km(m, p)
+        fig, _ = plot_mesh(m, p, ratio, 'actual / requested cell size', cmap='RdBu_r', vmin=0.75, vmax=1.25,
+                           extent=_regional_extent(m, p) if m.regional else _refinement_extent(p),
+                           title='Where the cell size departs from the request')
+        ratio_png = _png(fig, dpi=130)
 
     # Schematics (generic) and this mesh's boundary layers
     sch = []
@@ -441,7 +499,7 @@ def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_fil
                     'Boundary layers of this mesh: interior (0), relaxation layers 1–5, specified layers 6–7, '
                     'all beyond the cut line.'))
 
-    dists = _distributions(m, p, part_file, p.get('N', 1))
+    dists = _distributions(m, p, part_file, nparts)
 
     # ---- HTML
     cls, text = _status(results)
@@ -453,7 +511,13 @@ def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_fil
         rc = 'r-ok' if r.ok else ('r-fail' if r.severity == 'error' else 'r-warn')
         rows.append(f'<tr><td>{e(grp)}</td><td>{e(r.name)}</td><td class="{rc}">{res}</td>'
                     f'<td>{e(r.message)}</td><td>{e(what)}</td><td>{e(why)}</td><td>{e(refs)}</td></tr>')
-    params = ''.join(f'<tr><td><code>{e(str(k))}</code></td><td>{e(str(v))}</td></tr>' for k, v in p.items())
+    if p is not None:
+        params = ('<table><tr><th>Parameter</th><th>Value</th></tr>'
+                  + ''.join(f'<tr><td><code>{e(str(k))}</code></td><td>{e(str(v))}</td></tr>'
+                            for k, v in p.items()) + '</table>')
+    else:
+        params = ('<p class="sub">No generation parameters (mesh not made by this generator, or no input '
+                  'file given): the comparison with a requested resolution map is left out.</p>')
     files = [os.path.basename(grid_file), os.path.basename(graph_file or '')]
     if part_file:
         files.append(os.path.basename(part_file))
@@ -470,22 +534,23 @@ def write_report(grid_file, p, results, out_dir, name, graph_file=None, part_fil
              f'content="width=device-width, initial-scale=1"><title>Mesh report: {e(name)}</title>'
              f'<style>{CSS}</style></head><body>',
              f'<h1>Mesh report</h1><p class="sub"><code>{e(name)}</code><br>Made {now} by '
-             f'create_regional_mesh.py</p>',
+             f'{e(made_by)}</p>',
              f'<p><span class="badge {cls}">{e(text)}</span></p>',
              f'<div class="grid">{stats}</div>',
-             '<h2>Inputs</h2><table><tr><th>Parameter</th><th>Value</th></tr>' + params + '</table>',
+             '<h2>Inputs</h2>' + params,
              '<p class="sub">Files: ' + ', '.join(f'<code>{e(f)}</code>' for f in files if f) + '</p>',
              '<h2>Mesh</h2>',
              f'<figure><img src="{_b64(main_png)}" alt="Map of the mesh coloured by cell size">'
-             f'<figcaption>Cells coloured by size (mean distance to neighbouring cell centres). Green: refinement '
-             f'outlines; orange: cut; grey dotted: end of the uniform ring that holds the boundary layers.'
+             f'<figcaption>Cells coloured by size (mean distance to neighbouring cell centres).'
+             f'{OUTLINE_CAPTION if p is not None else ""}'
              f'{"" if coast else " (Coastlines unavailable: cartopy could not load Natural Earth data.)"}'
              f'</figcaption></figure>']
     for title, png in extra:
         parts.append(f'<figure><img src="{_b64(png)}" alt="{e(title)}"><figcaption>{e(title)}</figcaption></figure>')
-    parts.append(f'<figure><img src="{_b64(ratio_png)}" alt="Actual over requested cell size">'
-                 '<figcaption>Actual / requested cell size: white ≈ as requested; red = larger, blue = smaller.'
-                 '</figcaption></figure>')
+    if ratio_png is not None:
+        parts.append(f'<figure><img src="{_b64(ratio_png)}" alt="Actual over requested cell size">'
+                     '<figcaption>Actual / requested cell size: white ≈ as requested; red = larger, '
+                     'blue = smaller.</figcaption></figure>')
     parts.append('<h2>Checks</h2><table><tr><th>Group</th><th>Check</th><th>Result</th><th>Measured</th>'
                  '<th>What it tests</th><th>Why</th><th>Refs</th></tr>' + ''.join(rows) + '</table>'
                  '<p class="sub">FAIL = the mesh must not be used (the run stops before partitioning). '
