@@ -1,5 +1,45 @@
 #!/bin/bash
 
+# Read a mesh input file (key=value lines) into shell variables.
+# - '#' starts a comment; blank lines are ignored; Windows (CRLF) line ends are handled.
+# - Variables are ordinary (not read-only), so if a key appears twice the LAST value wins.
+# - Only lowercase names (plus N) are accepted, so environment variables like PATH
+#   can never be overwritten by an input file.
+# - The names that were read are listed in the array MESH_INPUT_KEYS.
+# Usage: read_mesh_inputs path/to/mesh_input_file.txt
+read_mesh_inputs() {
+    local _rmi_file=$1 _rmi_line _rmi_name _rmi_value
+    MESH_INPUT_KEYS=()
+    if [[ ! -f "$_rmi_file" ]]; then
+        echo "ERROR: mesh input file not found: $_rmi_file" >&2
+        return 1
+    fi
+    while IFS= read -r _rmi_line || [[ -n "$_rmi_line" ]]; do
+        _rmi_line=${_rmi_line%$'\r'}
+        _rmi_line=${_rmi_line%%#*}
+        [[ "$_rmi_line" =~ ^[[:space:]]*$ ]] && continue
+        if [[ "$_rmi_line" != *=* ]]; then
+            echo "WARNING: ignoring line without '=' in $_rmi_file: $_rmi_line" >&2
+            continue
+        fi
+        _rmi_name=$(_trim "${_rmi_line%%=*}")
+        _rmi_value=$(_trim "${_rmi_line#*=}")
+        if [[ ! "$_rmi_name" =~ ^([a-z_][a-z0-9_]*|N)$ ]]; then
+            echo "WARNING: ignoring invalid key '$_rmi_name' in $_rmi_file" >&2
+            continue
+        fi
+        printf -v "$_rmi_name" '%s' "$_rmi_value"
+        MESH_INPUT_KEYS+=("$_rmi_name")
+    done < "$_rmi_file"
+}
+
+_trim() {
+    local s=$1
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
 # Function to add or subtract hours to a given date in YYYYMMDDHH format
 add_hours() {
     # Built using duck.ai

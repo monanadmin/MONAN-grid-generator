@@ -1,30 +1,119 @@
-# Mesh parameters
-## Folder containing mesh_input_file.txt
-exp_dir=/mnt/beegfs/guilherme.mendonca/MONAN-Tools/scripts
-N=1
-## Folder containing vtx-mpas-meshes to generate meshes
-vtx_mpas_meshes_dir=/mnt/beegfs/guilherme.mendonca/MONAN-Tools/sources/CGFD-USP-Create-Mesh/vtx-mpas-meshes
-## Folder to save generated meshes
-meshes_dir=/mnt/beegfs/guilherme.mendonca/MONAN-Tools/grids
-## Coordinates of mesh center
-lon=-45.01576941
+#=============================================================================#
+# Reference mesh input file for create_mesh.bash
+#
+# Lists EVERY parameter. Your own input file only needs the keys that your
+# refinement and cut use (see each section); other keys are ignored.
+# Format: key=value, one per line; '#' starts a comment. Lengths in km,
+# angles in degrees. Run:  bash create_mesh.bash [your_input_file.txt]
+#
+# A mesh is a REFINEMENT (where cells are fine) combined with a CUT (whether
+# and how the globe is cut to a regional domain). All 9 combinations work:
+#
+#               cut=global        cut=circle         cut=ellipse
+#  uniform      uniform globe     uniform circle     uniform ellipse
+#  circle       circle on globe   circular domain    circle in elliptical domain
+#  ellipse      ellipse on globe  ellipse in circle  elliptical domain
+#=============================================================================#
+
+#-----------------------------------------------------------------------------
+# Location (always required)
+#   lat, lon : center of the refinement and of the cut (degrees)
+#-----------------------------------------------------------------------------
 lat=-22.66697851
-## Inner and outer radius (km)
+lon=-45.01576941
+
+#-----------------------------------------------------------------------------
+# Refinement (always required)
+#   refinement = uniform | circle | ellipse
+#   high_res   : finest cell size (km). Always required.
+#   low_res    : cell size outside the refinement (km). circle and ellipse only;
+#                must be larger than high_res.
+#-----------------------------------------------------------------------------
+refinement=circle
+high_res=1.5
+low_res=5
+
+#-----------------------------------------------------------------------------
+# Circle refinement parameters (refinement=circle only)
+#   Cell size is high_res out to inner_radius, then grows linearly to low_res
+#   at outer_radius, and is low_res beyond.
+#   inner_radius : radius of the high-resolution circle (km), >= 0
+#   outer_radius : radius where the transition ends (km), > inner_radius
+#-----------------------------------------------------------------------------
 inner_radius=300
 outer_radius=400
-## Number of external layers for r > outer_radius
+
+#-----------------------------------------------------------------------------
+# Ellipse refinement parameters (refinement=ellipse only)
+#   Cell size is high_res inside the ellipse, grows linearly to low_res up to
+#   the ellipse scaled by (1 + delta), and is low_res beyond.
+#   a_km  : semi-axis along the rotated x direction (km)
+#   b_km  : semi-axis along the rotated y direction (km)
+#   angle : rotation of the ellipse, degrees counter-clockwise from east (default 0)
+#   delta : transition width as a fraction of the ellipse size (default 0.12)
+#-----------------------------------------------------------------------------
+#a_km=2500
+#b_km=3688
+#angle=-45
+#delta=1
+
+#-----------------------------------------------------------------------------
+# Cut (always required)
+#   cut = global   no cut: a global mesh
+#       = circle   regional domain inside a circle around (lat, lon)
+#       = ellipse  regional domain inside an ellipse around (lat, lon)
+#   The cut must lie where the cell size is constant (outside the refinement's
+#   transition), otherwise the run stops and tells you the minimum valid size.
+#-----------------------------------------------------------------------------
+cut=circle
+
+#-----------------------------------------------------------------------------
+# Circle cut parameters (cut=circle only)
+#   cut_radius : radius of the domain (km).
+#                Default with refinement=circle: outer_radius. Required otherwise.
+#-----------------------------------------------------------------------------
+#cut_radius=400
+
+#-----------------------------------------------------------------------------
+# Ellipse cut parameters (cut=ellipse only)
+#   cut_a_km, cut_b_km : semi-axes of the domain (km)
+#   cut_angle          : rotation, degrees counter-clockwise from east
+#   Defaults with refinement=ellipse: (1 + delta) * a_km, (1 + delta) * b_km and
+#   angle, i.e. the domain ends where the transition ends. Required otherwise
+#   (cut_angle defaults to 0).
+#-----------------------------------------------------------------------------
+#cut_a_km=5000
+#cut_b_km=7376
+#cut_angle=-45
+
+#-----------------------------------------------------------------------------
+# Regional boundary (cut=circle or cut=ellipse)
+#   n_layers : MPAS-Limited-Area boundary layers (default 8). n_layers=N gives
+#              N-1 layers and MPAS needs 7, so keep 8. Beyond the cut, the cell
+#              size stays constant for n_layers cells, then coarsens up to 1000 km.
+#-----------------------------------------------------------------------------
 n_layers=8
-## High resolution for r < inner_radius
-high_res=1.5
-## Low resolution for r > outer_radius
-low_res=5
-## Whether to cut regional mesh (y/n)
-do_regional=y
-## Grid type (doughnut/constant)
-grid_type=doughnut
-## Ellipse parameters
-a_km=2500
-b_km=3688
-angle=-45
-delta=1
-# Automatic additions
+
+#-----------------------------------------------------------------------------
+# Partitioning
+#   N : number of MPI partitions for gpmetis (default 1 = no partition file)
+#-----------------------------------------------------------------------------
+N=1
+
+#-----------------------------------------------------------------------------
+# Mesh plot and report
+#   make_report : yes (default) writes <name>.png and <name>.report.html next to
+#                 the mesh: the mesh plot, every check with what it means, and
+#                 distributions of the mesh variables. no skips them.
+#-----------------------------------------------------------------------------
+#make_report=yes
+
+#-----------------------------------------------------------------------------
+# Optional paths (defaults shown; relative to the repository)
+#   meshes_dir          : where meshes are written (<repo>/grids)
+#   vtx_mpas_meshes_dir : mesh generator code (<repo>/sources/CGFD-USP-Create-Mesh/vtx-mpas-meshes)
+#-----------------------------------------------------------------------------
+#meshes_dir=
+#vtx_mpas_meshes_dir=
+
+# file_name is written below automatically after each run (the last mesh made).

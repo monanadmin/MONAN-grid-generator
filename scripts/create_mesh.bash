@@ -1,73 +1,61 @@
 #!/bin/bash
+#-----------------------------------------------------------------------------#
+# Create an MPAS/MONAN mesh from a mesh input file.
+#
+# Usage:  bash create_mesh.bash [mesh_input_file]
+#         (default: mesh_input_file.txt next to this script)
+#
+# The input file only needs the keys of the chosen refinement and cut; see the
+# reference scripts/mesh_input_file.txt for every key and its meaning.
+# Meshes are written to <repo>/grids/<name>.region/ unless meshes_dir is set.
+# Requires the conda env monan-grid (sources/CGFD-USP-Create-Mesh/envs/
+# monan_grid_env.yml); set MESH_CONDA_ENV to use another env.
+#-----------------------------------------------------------------------------#
+set -eo pipefail
 
-# !!!!! Requires vtx-mpas-meshes: https://github.com/marta-gil/vtx-mpas-meshes !!!!!
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(dirname "$SCRIPT_DIR")
+source "$SCRIPT_DIR/utils.bash"
 
-# Set environment variables exports:
-echo ""
-echo -e "\033[1;32m==>\033[0m Moduling environment for MONAN model...\n"
-. setenv.bash
+INPUT_FILE=${1:-$SCRIPT_DIR/mesh_input_file.txt}
+INPUT_FILE="$(cd "$(dirname "$INPUT_FILE")" && pwd)/$(basename "$INPUT_FILE")"
 
-# Standard directories variables:---------------------------------------
-DIRHOMES=${DIR_SCRIPTS}/scripts_CD-CT; mkdir -p ${DIRHOMES}
-DIRHOMED=${DIR_DADOS}/scripts_CD-CT;   mkdir -p ${DIRHOMED}
-SCRIPTS=${DIRHOMES}/scripts;           mkdir -p ${SCRIPTS}
-DATAIN=${DIRHOMED}/datain;             mkdir -p ${DATAIN}
-DATAOUT=${DIRHOMED}/dataout;           mkdir -p ${DATAOUT}
-SOURCES=${DIRHOMES}/sources;           mkdir -p ${SOURCES}
-EXECS=${DIRHOMED}/execs;               mkdir -p ${EXECS}
-#----------------------------------------------------------------------
+# Defaults (the input file may override them)
+vtx_mpas_meshes_dir=$REPO/sources/CGFD-USP-Create-Mesh/vtx-mpas-meshes
+meshes_dir=$REPO/grids
 
-echo -e  "${GREEN}==>${NC} creating fixed directory to save mesh... \n"
-mkdir -p ${DATAIN}/fixed
+echo "Reading $INPUT_FILE"
+read_mesh_inputs "$INPUT_FILE"
 
+# Keys passed on to Python when present in the input file
+MESH_KEYS=(lat lon refinement cut high_res low_res inner_radius outer_radius
+           a_km b_km angle delta cut_radius cut_a_km cut_b_km cut_angle
+           n_layers N make_report grid_type do_regional)
+OTHER_KEYS=(vtx_mpas_meshes_dir meshes_dir file_name)
+OLD_KEYS=(exp_dir)
 
-# Activate conda vtx_env environment
-CONDA_PATH="$(conda info --root)"
-source "$CONDA_PATH/etc/profile.d/conda.sh"
-conda activate vtx_env
-
-# Select parameters from input_file.txt
-echo "Reading input parameters:"
-while IFS="=" read -r name value; do
-    if [[ ! "$name" =~ ^\# ]]; then
-	declare -r $name=$value
-        echo $name":" $value
-    fi	
-done < mesh_input_file.txt
-
-# Run script
-cd $vtx_mpas_meshes_dir
-
-python3 create_regional_mesh.py \
-    --vtx_mpas_meshes_dir $vtx_mpas_meshes_dir \
-    --exp_dir $exp_dir \
-    --meshes_dir $meshes_dir \
-    --N $N \
-    --lon $lon \
-    --lat $lat \
-    --inner_radius $inner_radius \
-    --outer_radius $outer_radius \
-    --n_layers $n_layers \
-    --high_res $high_res \
-    --low_res $low_res \
-    --do_regional $do_regional \
-    --grid_type $grid_type \
-    --a_km $a_km \
-    --b_km $b_km \
-    --angle $angle \
-    --delta $delta
-
-cd -
-
-# Select parameters from input_file.txt
-echo "Reading input parameters:"
-while IFS="=" read -r name value; do
-    if [[ ! "$name" =~ ^\# ]]; then
-        declare -r $name=$value
-        echo $name":" $value
+args=()
+for key in "${MESH_KEYS[@]}"; do
+    if [[ -n "${!key:-}" ]]; then
+        args+=("--$key" "${!key}")
     fi
-done < mesh_input_file.txt
+done
+for key in "${MESH_INPUT_KEYS[@]}"; do
+    if [[ " ${OLD_KEYS[*]} " == *" $key "* ]]; then
+        echo "Note: '$key' is no longer used and is ignored."
+    elif [[ " ${MESH_KEYS[*]} ${OTHER_KEYS[*]} " != *" $key "* ]]; then
+        echo "WARNING: unknown key '$key' in $INPUT_FILE (typo?) - ignored." >&2
+    fi
+done
 
-# copy relevant files to fixed/
-cd ${meshes_dir}/${file_name}
-cp *.grid.nc *.graph.info ../  
+mkdir -p "$meshes_dir"
+
+# Activate the conda environment (provides python, jigsaw and gpmetis)
+CONDA_ENV=${MESH_CONDA_ENV:-monan-grid}
+if [[ "${CONDA_DEFAULT_ENV:-}" != "$CONDA_ENV" ]]; then
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
+fi
+
+python3 "$vtx_mpas_meshes_dir/create_regional_mesh.py" \
+    --input_file "$INPUT_FILE" --meshes_dir "$meshes_dir" "${args[@]}"

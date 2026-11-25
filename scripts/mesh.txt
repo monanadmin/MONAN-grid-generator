@@ -1,0 +1,19 @@
+# Mesh input file made with tools/mesh_input_designer.html (2026-11-23)
+# Run: bash scripts/create_mesh.bash <this file>
+lat=-1.9332
+lon=-60.293
+refinement=ellipse
+high_res=50
+low_res=250
+a_km=952.4
+b_km=634.9
+angle=0
+delta=0.959
+cut=ellipse
+cut_a_km=2490.9
+cut_b_km=1640.9
+cut_angle=0.7
+n_layers=8
+N=64
+# Automatic additions (written by create_regional_mesh.py)
+file_name=lat_-1.9332_lon_-60.293_ellipse_a_952.4_b_634.9_ang_0_delta_0.959_hres_50_lres_250_cut_ellipse_a_2490.9_b_1640.9_ang_0.7.region
